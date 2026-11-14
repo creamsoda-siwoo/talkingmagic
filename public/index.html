@@ -24,11 +24,16 @@
     <span class="quote">“빗물을 모아 거울을 만들고 번개를 되돌린다”</span>
   </div>
   <ul class="rules">
-    <li><b>창의적일수록 강해요.</b> 흔한 불덩이는 약하고, 상황을 엮은 기발한 수는 강합니다.</li>
-    <li><b>전장은 기억해요.</b> 세워 둔 벽, 깔린 안개가 다음 턴에 영향을 줍니다.</li>
-    <li><b>같은 수는 간파당해요.</b> 세 명의 마법사를 차례로 쓰러뜨리세요.</li>
+    <li><b>✍️ 창의적일수록 강해요.</b> 흔한 불덩이는 약하고, 상황을 엮은 기발한 수는 강합니다.</li>
+    <li><b>🧱 전장은 기억해요.</b> 세워 둔 벽, 깔린 안개가 화면에 남아 다음 턴에 영향을 줍니다.</li>
+    <li><b>📖 상대는 나를 배워요.</b> 같은 속성을 자주 쓰면 내성이 쌓이고, 내 습관을 노트에 적어 받아칩니다.</li>
+    <li><b>🎯 나도 상대를 배워요.</b> 상대마다 숨은 약점 속성이 있어요. 찾아내면 더 아프게 들어갑니다.</li>
   </ul>
   <button id="start-btn" class="primary">결투 시작</button>
+  <p id="memory-line" class="memory-line" hidden>
+    상대는 지난 결투에서 배운 것을 기억하고 있어요.
+    <button id="forget-btn" class="link" type="button">기억 지우기</button>
+  </p>
 </section>
 
 <!-- 결투 화면 -->
@@ -40,24 +45,46 @@
 
   <section class="arena" id="arena">
     <div class="fighter" id="player-side">
-      <div class="avatar" id="player-avatar">🧙</div>
+      <div class="avatar-wrap"><div class="avatar" id="player-avatar">🧙</div></div>
       <div class="name">나</div>
       <div class="hpbar"><div class="hpfill" id="player-hpfill"></div></div>
       <div class="hptext" id="player-hptext"></div>
       <div class="float" id="player-float"></div>
     </div>
-    <div class="vs">VS</div>
+    <div class="mid" aria-label="전장에 남은 효과">
+      <div class="zone" id="fx-player"></div>
+      <div class="zone" id="fx-field"></div>
+      <div class="zone" id="fx-enemy"></div>
+    </div>
     <div class="fighter" id="enemy-side">
-      <div class="avatar" id="enemy-avatar"></div>
+      <div class="avatar-wrap">
+        <div class="avatar" id="enemy-avatar"></div>
+        <span class="mood" id="enemy-mood" aria-hidden="true"></span>
+      </div>
       <div class="name" id="enemy-name"></div>
       <div class="hpbar"><div class="hpfill enemy" id="enemy-hpfill"></div></div>
       <div class="hptext" id="enemy-hptext"></div>
       <div class="float" id="enemy-float"></div>
     </div>
+    <div class="bubble" id="enemy-bubble" hidden></div>
+    <div class="banner" id="banner" hidden></div>
+    <div class="fx-layer" id="fx-layer" aria-hidden="true"></div>
     <div class="burst" id="burst" aria-hidden="true"></div>
   </section>
 
-  <div class="effects" id="effects" aria-label="전장에 남은 효과"></div>
+  <section class="intel" aria-label="서로 배운 것">
+    <div class="intel-row">
+      <span class="intel-item" title="상대의 숨은 약점 속성. 맞히면 드러나요.">
+        <span class="k">🎯 약점</span><span id="weak-slot" class="v"></span>
+      </span>
+      <span class="intel-item" title="내가 자주 쓴 속성일수록 상대가 덜 아파해요.">
+        <span class="k">🛡️ 상대 내성</span><span id="resist-slot" class="v"></span>
+      </span>
+    </div>
+    <div class="intel-row">
+      <span class="k">📖 간파 노트</span><span id="notes-slot" class="v notes"></span>
+    </div>
+  </section>
 
   <section class="log" id="log" aria-live="polite"></section>
 
@@ -77,6 +104,7 @@
     <h2 id="overlay-title"></h2>
     <p id="overlay-text"></p>
     <div id="overlay-best" class="best"></div>
+    <div id="overlay-notes" class="learned"></div>
     <button id="overlay-btn" class="primary"></button>
   </div>
 </div>
