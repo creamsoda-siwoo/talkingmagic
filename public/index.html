@@ -24,6 +24,7 @@
     <span class="quote">“빗물을 모아 거울을 만들고 번개를 되돌린다”</span>
   </div>
   <ul class="rules">
+    <li><b>⚔️ 실시간 전투예요.</b> 주문을 쓰는 동안에도 상대는 계속 공격합니다. 방어 마법을 세워 두면 막아 줘요.</li>
     <li><b>✍️ 창의적일수록 강해요.</b> 흔한 불덩이는 약하고, 상황을 엮은 기발한 수는 강합니다.</li>
     <li><b>🧱 전장은 기억해요.</b> 세워 둔 벽, 깔린 안개가 화면에 남아 다음 턴에 영향을 줍니다.</li>
     <li><b>📖 상대는 나를 배워요.</b> 같은 속성을 자주 쓰면 내성이 쌓이고, 내 습관을 노트에 적어 받아칩니다.</li>
@@ -43,33 +44,26 @@
     <span id="mode-badge" class="badge" hidden>연습 모드</span>
   </header>
 
-  <section class="arena" id="arena">
-    <div class="fighter" id="player-side">
-      <div class="avatar-wrap"><div class="avatar" id="player-avatar">🧙</div></div>
-      <div class="name">나</div>
+  <div class="hud">
+    <div class="hud-side">
+      <div class="name">🧙 나</div>
       <div class="hpbar"><div class="hpfill" id="player-hpfill"></div></div>
       <div class="hptext" id="player-hptext"></div>
-      <div class="float" id="player-float"></div>
     </div>
-    <div class="mid" aria-label="전장에 남은 효과">
-      <div class="zone" id="fx-player"></div>
-      <div class="zone" id="fx-field"></div>
-      <div class="zone" id="fx-enemy"></div>
-    </div>
-    <div class="fighter" id="enemy-side">
-      <div class="avatar-wrap">
-        <div class="avatar" id="enemy-avatar"></div>
-        <span class="mood" id="enemy-mood" aria-hidden="true"></span>
-      </div>
-      <div class="name" id="enemy-name"></div>
+    <div class="hud-side enemy">
+      <div class="name"><span id="enemy-name"></span> <span class="mood" id="enemy-mood" aria-hidden="true"></span></div>
       <div class="hpbar"><div class="hpfill enemy" id="enemy-hpfill"></div></div>
       <div class="hptext" id="enemy-hptext"></div>
-      <div class="float" id="enemy-float"></div>
+      <div class="atk" title="상대의 다음 기본 공격까지">
+        <span>다음 공격</span><div class="atkbar"><i id="atk-fill"></i></div>
+      </div>
     </div>
+  </div>
+
+  <section class="arena" id="arena">
+    <canvas id="scene" aria-label="전투 장면"></canvas>
     <div class="bubble" id="enemy-bubble" hidden></div>
     <div class="banner" id="banner" hidden></div>
-    <div class="fx-layer" id="fx-layer" aria-hidden="true"></div>
-    <div class="burst" id="burst" aria-hidden="true"></div>
   </section>
 
   <section class="intel" aria-label="서로 배운 것">

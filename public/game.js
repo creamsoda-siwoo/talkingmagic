@@ -1,8 +1,9 @@
 import {
   RIVALS, PLAYER_MAX_HP, MAX_SPELL_LENGTH, ELEMENT_INFO, RESIST_PER_STACK, RESIST_CAP,
+  EFFECT_SECONDS, BLOCK_COST_SECONDS,
 } from "./rivals.js";
+import { createScene } from "./scene.js";
 
-const AVATARS = { pip: "🧑‍🎓", evelyn: "🧝‍♀️", morgath: "🧙‍♂️" };
 const MOOD_FACES = {
   calm: "😐", smug: "😏", surprised: "😲", angry: "😠", scared: "😨", impressed: "🤩",
 };
@@ -12,20 +13,27 @@ const TIERS = [
   { min: 4, label: "쓸 만한 주문", cls: "t2" },
   { min: 1, label: "밋밋한 주문", cls: "t1" },
 ];
-const HEAL_BETWEEN_DUELS = 40;
+const HEAL_BETWEEN_DUELS = 60;
+const FIRST_ATTACK_GRACE = 5; // 결투 시작 직후 첫 기본 공격까지 더 주는 시간(초)
+const FOG_MISS_CHANCE = 0.5;
 const MEMORY_KEY = "talkingmagic.notes";
 
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const scene = createScene($("scene"));
 
 const state = {
-  rival: 0, playerHp: PLAYER_MAX_HP, enemyHp: 0, turn: 1,
-  effects: [], history: [], pastSpells: [], busy: false,
-  resist: {},      // 상대가 익숙해진 속성 → 내가 쓴 횟수
-  notes: [],       // 상대가 나에 대해 적은 간파 노트
-  weakFound: [],   // 내가 찾아낸 상대의 약점 속성
-  best: null,      // 이번 도전에서 창의력 점수가 가장 높았던 주문
+  phase: "idle",   // idle | fight | over
+  epoch: 0,        // 결투가 끝나거나 바뀌면 올라간다. 늦게 도착한 판정을 버리는 데 쓴다.
+  rival: 0, playerHp: PLAYER_MAX_HP, enemyHp: 0, casts: 1,
+  effects: [], history: [], pastSpells: [],
+  channeling: false, // 내 주문을 심판이 읽는 중
+  resolving: false,  // 판정 결과를 연출하는 중 (이 동안 기본 공격은 멈춘다)
+  enemyTimer: 0,     // 상대의 다음 기본 공격까지 남은 초
+  sinceLast: 0,      // 지난 주문 이후 흐른 초
+  basic: { hits: 0, damage: 0, blocked: 0 }, // 지난 주문 이후 받은 기본 공격
+  resist: {}, notes: [], weakFound: [], best: null,
 };
 
 // 상대의 기억은 브라우저에 남아 다음 도전으로 이어진다.
@@ -89,32 +97,15 @@ async function typeInto(node, text) {
 function renderHp() {
   const rival = RIVALS[state.rival];
   $("player-hpfill").style.width = `${(state.playerHp / PLAYER_MAX_HP) * 100}%`;
+  $("player-hpfill").classList.toggle("low", state.playerHp <= PLAYER_MAX_HP * 0.3);
   $("enemy-hpfill").style.width = `${(state.enemyHp / rival.hp) * 100}%`;
   $("player-hptext").textContent = `${state.playerHp} / ${PLAYER_MAX_HP}`;
   $("enemy-hptext").textContent = `${state.enemyHp} / ${rival.hp}`;
 }
 
-const OWNER_LABEL = { player: "내게 유리", enemy: "상대에게 유리", field: "중립" };
-
-/** 전장에 남은 효과를 실제 위치(내 쪽·가운데·상대 쪽)에 세워 둔다. */
-function renderEffects() {
-  const zones = { player: [], field: [], enemy: [] };
-  for (const e of state.effects) {
-    const token = el("div", `token ${e.owner}`);
-    token.title = `${e.name} · ${OWNER_LABEL[e.owner]} · ${e.turns}턴 남음`;
-    token.append(el("span", "ico", iconOf(e.icon, "arcane")), el("span", "lbl", e.name));
-    const pips = el("span", "pips");
-    for (let i = 0; i < e.turns; i++) pips.append(el("i"));
-    token.append(pips);
-    zones[e.where].push(token);
-  }
-  for (const where of Object.keys(zones)) $(`fx-${where}`).replaceChildren(...zones[where]);
-}
-
 /** 약점·내성·간파 노트. fresh는 방금 새로 생긴 노트, used는 상대가 방금 써먹은 노트. */
 function renderIntel({ fresh = [], used = "" } = {}) {
-  const weak = $("weak-slot");
-  weak.replaceChildren(...(state.weakFound.length
+  $("weak-slot").replaceChildren(...(state.weakFound.length
     ? state.weakFound.map((e) => el("span", "pill weak", `${ELEMENT_INFO[e].icon} ${ELEMENT_INFO[e].name}`))
     : [el("span", "empty", "❓ 아직 못 찾음")]));
 
@@ -134,11 +125,6 @@ function renderIntel({ fresh = [], used = "" } = {}) {
     : [el("span", "empty", "상대가 아직 나를 몰라요")]));
 }
 
-function setActive(side) {
-  $("player-side").classList.toggle("active", side === "player");
-  $("enemy-side").classList.toggle("active", side === "enemy");
-}
-
 function showBanner(className, ...children) {
   const banner = $("banner");
   banner.className = `banner ${className}`;
@@ -155,7 +141,7 @@ async function showPower(creativity) {
   showBanner(tier.cls, el("div", "label", `${tier.label} · 창의력 ${creativity}`), gauge);
   void fill.offsetWidth;
   fill.style.width = `${creativity * 10}%`;
-  await sleep(reducedMotion ? 300 : 1100);
+  await sleep(reducedMotion ? 300 : 950);
 }
 
 function setMood(mood, line) {
@@ -169,156 +155,9 @@ function setMood(mood, line) {
   bubble.textContent = line ?? "";
 }
 
-function float(target, text, kind, sub) {
-  const f = $(`${target}-float`);
-  f.replaceChildren(document.createTextNode(text));
-  if (sub) f.append(el("small", "", sub));
-  f.className = "float";
-  void f.offsetWidth;
-  f.className = `float show ${kind}`;
-}
-
-// ---------- 주문 연출 ----------
-
-function centerOf(node) {
-  const a = $("arena").getBoundingClientRect();
-  const r = node.getBoundingClientRect();
-  return { x: r.left - a.left + r.width / 2, y: r.top - a.top + r.height / 2 };
-}
-
-function spawn(className, text, x, y, size) {
-  const node = el("span", `fx ${className}`, text);
-  node.style.fontSize = `${size}px`;
-  node.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-  $("fx-layer").append(node);
-  return node;
-}
-
-const at = (x, y, extra = "") => `translate(${x}px, ${y}px) translate(-50%, -50%) ${extra}`;
-
-/** 주문의 겉모습(form)에 따라 시전자에서 대상까지 눈에 보이는 연출을 한다. */
-async function playSpell(caster, { form, icon, element, power }) {
-  if (reducedMotion) return;
-  const target = caster === "player" ? "enemy" : "player";
-  const from = centerOf($(`${caster}-avatar`));
-  const to = centerOf($(`${target}-avatar`));
-  const color = ELEMENT_INFO[element]?.color ?? "#fff";
-  const size = 24 + 26 * power;
-  const dir = Math.sign(to.x - from.x);
-  const glow = `drop-shadow(0 0 ${6 + 10 * power}px ${color})`;
-  const done = [];
-  const run = (node, frames, opts) => {
-    node.style.filter = glow;
-    const anim = node.animate(frames, { fill: "forwards", easing: "ease-in", ...opts });
-    done.push(anim.finished.then(() => node.remove()));
-  };
-
-  if (form === "beam") {
-    const beam = el("span", "fx beam");
-    const width = Math.abs(to.x - from.x);
-    beam.style.width = `${width}px`;
-    beam.style.height = `${6 + 12 * power}px`;
-    beam.style.background = `linear-gradient(${dir > 0 ? 90 : 270}deg, transparent, ${color}, #fff)`;
-    beam.style.transformOrigin = dir > 0 ? "left center" : "right center";
-    const left = Math.min(from.x, to.x);
-    $("fx-layer").append(beam);
-    run(beam, [
-      { transform: `translate(${left}px, ${from.y}px) scaleX(0)`, opacity: 1 },
-      { transform: `translate(${left}px, ${from.y}px) scaleX(1)`, opacity: 1, offset: 0.5 },
-      { transform: `translate(${left}px, ${from.y}px) scaleX(1)`, opacity: 0 },
-    ], { duration: 520 });
-    const tip = spawn("", icon, to.x, to.y, size);
-    run(tip, [
-      { transform: at(to.x, to.y, "scale(0)"), opacity: 0, offset: 0 },
-      { transform: at(to.x, to.y, "scale(0)"), opacity: 0, offset: 0.45 },
-      { transform: at(to.x, to.y, "scale(1.5)"), opacity: 1, offset: 0.7 },
-      { transform: at(to.x, to.y, "scale(1)"), opacity: 0, offset: 1 },
-    ], { duration: 620 });
-  } else if (form === "rain") {
-    for (let i = 0; i < 6; i++) {
-      const x = to.x + (i - 2.5) * 13;
-      const drop = spawn("", icon, x, -20, size * 0.7);
-      run(drop, [
-        { transform: at(x + dir * -20, -24), opacity: 0 },
-        { transform: at(x + dir * -10, to.y * 0.4), opacity: 1, offset: 0.4 },
-        { transform: at(x, to.y + 6), opacity: 1, offset: 0.9 },
-        { transform: at(x, to.y + 10, "scale(1.4)"), opacity: 0 },
-      ], { duration: 560, delay: i * 70 });
-    }
-  } else if (form === "barrier") {
-    const x = from.x + dir * 52;
-    const wall = spawn("", icon, x, from.y, size * 1.3);
-    run(wall, [
-      { transform: at(x, from.y + 30, "scale(0)"), opacity: 0 },
-      { transform: at(x, from.y, "scale(1.35)"), opacity: 1, offset: 0.45 },
-      { transform: at(x, from.y, "scale(1)"), opacity: 1, offset: 0.8 },
-      { transform: at(x, from.y, "scale(1)"), opacity: 0 },
-    ], { duration: 800, easing: "ease-out" });
-  } else if (form === "aura") {
-    const ring = el("span", "fx ring");
-    ring.style.width = ring.style.height = "70px";
-    ring.style.borderColor = color;
-    $("fx-layer").append(ring);
-    run(ring, [
-      { transform: at(from.x, from.y, "scale(.3)"), opacity: 1 },
-      { transform: at(from.x, from.y, "scale(1.9)"), opacity: 0 },
-    ], { duration: 750, easing: "ease-out" });
-    const rise = spawn("", icon, from.x, from.y, size);
-    run(rise, [
-      { transform: at(from.x, from.y + 10), opacity: 0 },
-      { transform: at(from.x, from.y - 20), opacity: 1, offset: 0.4 },
-      { transform: at(from.x, from.y - 54), opacity: 0 },
-    ], { duration: 800, easing: "ease-out" });
-  } else if (form === "trap") {
-    const y = to.y + 22;
-    const trap = spawn("", icon, to.x, y, size);
-    run(trap, [
-      { transform: at(to.x, y + 14, "scale(0)"), opacity: 0 },
-      { transform: at(to.x, y, "scale(1.4) rotate(-12deg)"), opacity: 1, offset: 0.4 },
-      { transform: at(to.x, y, "scale(1.2) rotate(10deg)"), opacity: 1, offset: 0.7 },
-      { transform: at(to.x, y, "scale(1)"), opacity: 0 },
-    ], { duration: 800, easing: "ease-out" });
-  } else if (form === "fizzle") {
-    const puff = spawn("", "💨", from.x, from.y, 30);
-    run(puff, [
-      { transform: at(from.x + dir * 20, from.y, "scale(.4)"), opacity: 1 },
-      { transform: at(from.x + dir * 34, from.y - 40, "scale(1.3)"), opacity: 0 },
-    ], { duration: 800, easing: "ease-out" });
-  } else {
-    // projectile: 포물선을 그리며 날아간다
-    const shot = spawn("", icon, from.x, from.y, size);
-    const midX = (from.x + to.x) / 2;
-    run(shot, [
-      { transform: at(from.x, from.y, "scale(.4) rotate(0deg)"), opacity: 1 },
-      { transform: at(midX, Math.min(from.y, to.y) - 46, `scale(1) rotate(${dir * 180}deg)`), opacity: 1, offset: 0.5 },
-      { transform: at(to.x, to.y, `scale(1.25) rotate(${dir * 360}deg)`), opacity: 1 },
-    ], { duration: 560 });
-  }
-  await Promise.all(done);
-}
-
-/** 맞는 순간: 속성 색 섬광, 흔들림, 피해 숫자. */
-async function impact(target, { amount, element, kind = "dmg", sub, blocked }) {
-  if (amount > 0) {
-    const burst = $("burst");
-    burst.style.setProperty("--c", ELEMENT_INFO[element]?.color ?? "#fff");
-    burst.className = `burst to-${target}`;
-    void burst.offsetWidth;
-    burst.classList.add("go");
-    const side = $(`${target}-side`);
-    side.classList.remove("hit");
-    void side.offsetWidth;
-    side.classList.add("hit");
-    if (amount >= 20) {
-      $("arena").classList.remove("shake");
-      void $("arena").offsetWidth;
-      $("arena").classList.add("shake");
-    }
-    float(target, `-${amount}`, kind, sub);
-  } else if (blocked) {
-    float(target, blocked, "miss");
-  }
-  await sleep(reducedMotion ? 150 : 600);
+function setCastButton() {
+  $("cast-btn").disabled = state.channeling || state.phase !== "fight";
+  $("cast-btn").textContent = state.channeling ? "시전 중…" : "주문 외우기";
 }
 
 // ---------- 기록(로그) ----------
@@ -342,37 +181,100 @@ function addTurnEntry({ who, spell, enemy = false }) {
   return addEntry(entry);
 }
 
-// ---------- 게임 진행 ----------
+// ---------- 실시간 진행 ----------
+
+/** 매 프레임: 지속 효과의 시간이 흐르고, 상대가 기본 공격을 모은다. */
+function tick(dt) {
+  if (state.phase !== "fight" || state.resolving) return;
+  state.sinceLast += dt;
+  for (let i = state.effects.length - 1; i >= 0; i--) {
+    state.effects[i].remaining -= dt;
+    if (state.effects[i].remaining <= 0) state.effects.splice(i, 1);
+  }
+  const every = RIVALS[state.rival].basic.every;
+  state.enemyTimer -= dt;
+  const charge = Math.max(0, Math.min(1, 1 - state.enemyTimer / every));
+  scene.enemyCharge = charge;
+  $("atk-fill").style.width = `${charge * 100}%`;
+  $("atk-fill").parentElement.classList.toggle("soon", charge > 0.8);
+  if (state.enemyTimer <= 0) {
+    state.enemyTimer = every;
+    basicAttack();
+  }
+}
+scene.onTick = tick;
+
+/** 상대의 기본 공격 한 발. 내 방벽이 있으면 막히고, 내게 유리한 날씨면 빗나갈 수 있다. */
+async function basicAttack() {
+  const epoch = state.epoch;
+  const rival = RIVALS[state.rival];
+  const [element, icon] = rival.basic.shots[Math.floor(Math.random() * rival.basic.shots.length)];
+  const wall = state.effects.find((e) => e.owner === "player" && e.where === "player");
+  const cover = state.effects.find((e) => e.owner === "player" && e.where === "field");
+  const miss = !wall && Boolean(cover) && Math.random() < FOG_MISS_CHANCE;
+
+  await scene.launch("enemy", { form: "projectile", icon, element, power: 0.15, blocked: Boolean(wall), miss });
+  if (epoch !== state.epoch || state.phase !== "fight") return;
+
+  if (wall) {
+    wall.remaining -= BLOCK_COST_SECONDS;
+    scene.flashEffect(wall);
+    scene.float("player", "막음!", { color: "#6fe3a5", size: 16, sub: wall.name });
+    state.basic.blocked += 1;
+  } else if (miss) {
+    scene.float("player", "빗나감", { color: "#a79fc7", size: 15, sub: cover.name });
+  } else {
+    const [lo, hi] = rival.basic.damage;
+    const dmg = lo + Math.floor(Math.random() * (hi - lo + 1));
+    state.playerHp = Math.max(0, state.playerHp - dmg);
+    state.basic.hits += 1;
+    state.basic.damage += dmg;
+    scene.hit("player");
+    scene.float("player", `-${dmg}`, { size: 18 });
+    renderHp();
+    if (state.playerHp <= 0) endDuel(false);
+  }
+}
+
+/** 판정이 준 효과 목록을 실시간 타이머가 달린 효과로 바꾼다. 이미 있던 효과는 남은 시간을 잇는다. */
+function mergeEffects(list) {
+  return list.map((e) => {
+    const total = e.turns * EFFECT_SECONDS;
+    const old = state.effects.find((o) => o.name === e.name && o.where === e.where);
+    const icon = iconOf(e.icon, "arcane");
+    return old
+      ? { ...e, icon, remaining: Math.min(old.remaining, total), total: old.total }
+      : { ...e, icon, remaining: total, total };
+  });
+}
 
 function startDuel(index, intro) {
   const rival = RIVALS[index];
+  state.epoch += 1;
   Object.assign(state, {
-    rival: index, enemyHp: rival.hp, turn: 1,
-    effects: [], history: [], pastSpells: [], weakFound: [], busy: false,
+    phase: "fight", rival: index, enemyHp: rival.hp, casts: 1,
+    history: [], pastSpells: [], weakFound: [],
+    channeling: false, resolving: false,
+    enemyTimer: rival.basic.every + FIRST_ATTACK_GRACE, sinceLast: 0,
+    basic: { hits: 0, damage: 0, blocked: 0 },
   });
+  state.effects.length = 0;
+  scene.effects = state.effects;
+  scene.reset();
+  scene.setRival(rival.id);
   $("stage-label").textContent = `${index + 1}번째 결투 · 전체 ${RIVALS.length}번`;
-  $("enemy-avatar").textContent = AVATARS[rival.id];
   $("enemy-name").textContent = rival.name;
-  $("enemy-side").classList.remove("down");
-  $("player-side").classList.remove("down");
   $("banner").hidden = true;
+  $("arena").classList.remove("judging");
   setMood("calm", "");
   $("log").replaceChildren();
-  addEntry(el("div", "entry system", `${rival.name}이(가) 결투장에 들어섭니다. 첫 주문을 적어 보세요.`));
+  addEntry(el("div", "entry system",
+    `${rival.name}이(가) 결투장에 들어섭니다. 실시간 전투예요. 주문을 쓰는 동안에도 상대는 공격합니다!`));
   if (intro) addEntry(el("div", "entry system", intro));
   renderHp();
-  renderEffects();
   renderIntel();
-  setBusy(false);
-  setActive("player");
+  setCastButton();
   $("spell-input").focus();
-}
-
-function setBusy(busy) {
-  state.busy = busy;
-  $("cast-btn").disabled = busy;
-  $("spell-input").disabled = busy;
-  $("cast-btn").textContent = busy ? "판정 중" : "주문 외우기";
 }
 
 async function requestVerdict(spell) {
@@ -380,10 +282,16 @@ async function requestVerdict(spell) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      spell, rival: state.rival, turn: state.turn,
-      playerHp: state.playerHp, enemyHp: state.enemyHp,
-      effects: state.effects, history: state.history, pastSpells: state.pastSpells,
+      spell, rival: state.rival, turn: state.casts,
+      playerHp: Math.max(1, state.playerHp), enemyHp: state.enemyHp,
+      effects: state.effects.map((e) => ({
+        owner: e.owner, where: e.where, name: e.name, icon: e.icon,
+        turns: Math.max(1, Math.ceil(e.remaining / EFFECT_SECONDS)),
+      })),
+      history: state.history, pastSpells: state.pastSpells,
       resist: state.resist, notes: state.notes,
+      sinceLast: Math.round(state.sinceLast),
+      basicHits: state.basic.hits, basicBlocked: state.basic.blocked,
     }),
   });
   const result = await res.json().catch(() => ({}));
@@ -392,39 +300,63 @@ async function requestVerdict(spell) {
 }
 
 async function cast(spell) {
-  if (state.busy) return;
-  setBusy(true);
+  if (state.channeling || state.phase !== "fight") return;
+  const epoch = state.epoch;
+  const stale = () => epoch !== state.epoch;
   const rival = RIVALS[state.rival];
+  state.channeling = true;
+  setCastButton();
 
-  const playerEntry = addTurnEntry({ who: `${state.turn}턴 · 나`, spell });
+  // 주문을 준비하는 동안 받은 기본 공격을 한 줄로 정리한다.
+  const { hits, damage, blocked } = state.basic;
+  if (hits || blocked) {
+    const parts = [];
+    if (hits) parts.push(`기본 공격 ${hits}번 맞음 (-${damage})`);
+    if (blocked) parts.push(`${blocked}번 막음`);
+    addEntry(el("div", "entry system", `⚔️ 주문을 준비하는 동안: ${parts.join(", ")}`));
+  }
+
+  const playerEntry = addTurnEntry({ who: `${state.casts}번째 주문 · 나`, spell });
+  scene.setChannel("player", true, spell);
   $("arena").classList.add("judging");
   $("enemy-bubble").hidden = true;
-  const orb = el("span", "orb", "🔮");
-  showBanner("wait", orb, document.createTextNode(" 심판이 주문을 읽는 중…"));
+  showBanner("wait", el("span", "orb", "🔮"), document.createTextNode(" 시전 중… 심판이 주문을 읽어요"));
 
   let result;
   try {
     result = await requestVerdict(spell);
   } catch (err) {
+    if (stale()) return;
     playerEntry.remove();
+    scene.setChannel("player", false);
     $("banner").hidden = true;
     $("arena").classList.remove("judging");
     addEntry(el("div", "entry error",
       err instanceof TypeError ? "서버에 닿지 않아요. 연결을 확인하고 다시 시도해 주세요." : err.message));
-    $("spell-input").value = spell; // 쓴 주문을 잃지 않게 되돌린다
-    updateCounter();
-    setBusy(false);
-    $("spell-input").focus();
+    // 쓴 주문을 잃지 않게 되돌린다 (그사이 새로 쓰기 시작했다면 그대로 둔다)
+    if (!$("spell-input").value) {
+      $("spell-input").value = spell;
+      updateCounter();
+    }
+    state.channeling = false;
+    setCastButton();
     return;
   }
+  if (stale()) return; // 판정을 기다리는 사이 쓰러졌다
+
+  state.resolving = true;
+  scene.enemyCharge = 0;
+  $("atk-fill").style.width = "0%";
   $("arena").classList.remove("judging");
   $("mode-badge").hidden = result.mode !== "mock";
   const { player, enemy } = result;
 
   // 1) 내 주문: 위력 게이지 → 날아가는 연출 → 맞는 순간
   await showPower(player.creativity);
+  if (stale()) return;
+  scene.setChannel("player", false);
   const power = (player.creativity + player.logic) / 20;
-  await playSpell("player", {
+  await scene.launch("player", {
     form: player.form, icon: iconOf(player.icon, player.element), element: player.element, power,
   });
   $("banner").hidden = true;
@@ -432,17 +364,20 @@ async function cast(spell) {
   const tags = [];
   if (player.weakHit) tags.push(el("span", "tag weak", "🎯 약점 적중 ×1.3"));
   if (player.resistPct > 0) tags.push(el("span", "tag resist", `🛡️ 내성 -${player.resistPct}%`));
-  const offensive = !["barrier", "aura", "fizzle"].includes(player.form);
-  await impact("enemy", {
-    amount: player.damage, element: player.element,
-    kind: player.weakHit ? "dmg crit" : "dmg",
-    sub: player.weakHit ? "약점!" : player.resistPct > 0 ? `익숙한 속성 -${player.resistPct}%` : "",
-    blocked: offensive ? "막힘" : "",
-  });
+  if (player.damage > 0) {
+    scene.hit("enemy", player.damage >= 18);
+    scene.float("enemy", `-${player.damage}`, {
+      color: player.weakHit ? "#f3c969" : "#ff8f9c",
+      size: player.weakHit ? 30 : 20 + power * 8,
+      sub: player.weakHit ? "약점!" : player.resistPct > 0 ? `익숙한 속성 -${player.resistPct}%` : "",
+    });
+  } else if (!["barrier", "aura", "fizzle"].includes(player.form)) {
+    scene.float("enemy", "막힘", { color: "#a79fc7", size: 15 });
+  }
   state.enemyHp = Math.max(0, state.enemyHp - player.damage);
   if (player.heal > 0) {
     state.playerHp = Math.min(PLAYER_MAX_HP, state.playerHp + player.heal);
-    float("player", `+${player.heal}`, "heal");
+    scene.float("player", `+${player.heal}`, { color: "#6fe3a5" });
   }
   if (player.weakHit && !state.weakFound.includes(player.element)) {
     state.weakFound.push(player.element);
@@ -465,55 +400,53 @@ async function cast(spell) {
   playerEntry.append(verdict);
   if (player.comment) playerEntry.append(el("div", "comment", `심판: ${player.comment}`));
   scrollLog();
+  if (stale()) return;
 
   if (!state.best || player.creativity > state.best.creativity) {
     state.best = { spell, creativity: player.creativity };
   }
 
   if (state.enemyHp <= 0) {
-    setMood("scared", "");
+    state.notes = result.notes;
+    renderIntel();
     if (enemy.narration) {
       const fall = addTurnEntry({ who: rival.name, enemy: true });
-      const p = el("p", "narr");
-      fall.append(p);
-      await typeInto(p, enemy.narration);
+      fall.append(el("p", "narr", enemy.narration));
+      scrollLog();
     }
-    $("enemy-side").classList.add("down");
-    state.effects = [];
-    state.notes = result.notes;
-    renderEffects();
-    renderIntel();
-    setActive(null);
-    await sleep(1100);
-    return finishDuel(true);
+    return endDuel(true);
   }
 
-  // 2) 상대의 반격: 표정과 대사 → 연출 → 맞는 순간
-  await sleep(500);
-  setActive("enemy");
+  // 2) 상대의 큰 반격: 표정과 대사 → 연출 → 맞는 순간
+  await sleep(450);
+  if (stale()) return;
   setMood(enemy.mood, enemy.line);
   const freshNotes = result.notes.filter((n) => !state.notes.includes(n));
   state.notes = result.notes;
   renderIntel({ fresh: freshNotes, used: enemy.exploit });
-  await sleep(reducedMotion ? 200 : 800);
+  await sleep(reducedMotion ? 200 : 650);
+  if (stale()) return;
 
   const enemyEntry = addTurnEntry({ who: rival.name, spell: enemy.spell, enemy: true });
-  await playSpell("enemy", {
+  await scene.launch("enemy", {
     form: enemy.form, icon: iconOf(enemy.icon, enemy.element), element: enemy.element,
-    power: enemy.damage / rival.maxDamage,
+    power: 0.3 + 0.7 * (enemy.damage / rival.maxDamage),
   });
-  await impact("player", {
-    amount: enemy.damage, element: enemy.element,
-    blocked: ["barrier", "aura", "fizzle"].includes(enemy.form) ? "" : "막아냄!",
-  });
+  if (stale()) return;
+  if (enemy.damage > 0) {
+    scene.hit("player", enemy.damage >= 12);
+    scene.float("player", `-${enemy.damage}`, { size: 22 });
+  } else if (!["barrier", "aura", "fizzle"].includes(enemy.form)) {
+    scene.float("player", "막아냄!", { color: "#6fe3a5", size: 16 });
+  }
   state.playerHp = Math.max(0, state.playerHp - enemy.damage);
   if (enemy.heal > 0) {
     state.enemyHp = Math.min(rival.hp, state.enemyHp + enemy.heal);
-    float("enemy", `+${enemy.heal}`, "heal");
+    scene.float("enemy", `+${enemy.heal}`, { color: "#6fe3a5" });
   }
-  state.effects = result.effects;
+  // 같은 배열을 유지해야 장면이 계속 따라 그린다.
+  state.effects.splice(0, state.effects.length, ...mergeEffects(result.effects));
   renderHp();
-  renderEffects();
 
   const enemyNarr = el("p", "narr");
   enemyEntry.append(enemyNarr);
@@ -527,26 +460,48 @@ async function cast(spell) {
     addEntry(el("div", "entry system", `📖 상대가 노트에 적습니다: “${freshNotes.join("”, “")}”`));
   }
   scrollLog();
+  if (stale()) return;
 
-  if (state.playerHp <= 0) {
-    $("player-side").classList.add("down");
-    setActive(null);
-    await sleep(1100);
-    return finishDuel(false);
-  }
+  if (state.playerHp <= 0) return endDuel(false);
 
+  // 다시 실시간으로: 상대가 다음 기본 공격을 모으기 시작한다.
   state.history.push({
     playerSpell: spell, playerResult: player.narration,
     enemySpell: enemy.spell, enemyResult: enemy.narration,
   });
+  state.history = state.history.slice(-5);
   state.pastSpells.push(spell);
-  state.turn += 1;
-  setBusy(false);
-  setActive("player");
-  $("spell-input").focus();
+  state.casts += 1;
+  state.sinceLast = 0;
+  state.basic = { hits: 0, damage: 0, blocked: 0 };
+  state.enemyTimer = rival.basic.every;
+  state.resolving = false;
+  state.channeling = false;
+  setCastButton();
 }
 
-function finishDuel(won) {
+/** 결투를 끝낸다. 진행 중이던 판정과 날아가던 공격은 epoch가 바뀌어 무시된다. */
+async function endDuel(won) {
+  if (state.phase !== "fight") return;
+  state.phase = "over";
+  state.epoch += 1;
+  const epoch = state.epoch;
+  scene.setChannel("player", false);
+  scene.setDown(won ? "enemy" : "player");
+  scene.enemyCharge = 0;
+  $("atk-fill").style.width = "0%";
+  $("banner").hidden = true;
+  $("arena").classList.remove("judging");
+  if (won) setMood("scared", "");
+  else addEntry(el("div", "entry system", "더는 버티지 못하고 쓰러집니다…"));
+  state.effects.length = 0;
+  state.channeling = false;
+  setCastButton();
+  await sleep(1300);
+  if (epoch === state.epoch) showResult(won);
+}
+
+function showResult(won) {
   const rival = RIVALS[state.rival];
   const last = state.rival === RIVALS.length - 1;
   const best = $("overlay-best");
@@ -563,7 +518,7 @@ function finishDuel(won) {
     const healed = Math.min(PLAYER_MAX_HP, state.playerHp + HEAL_BETWEEN_DUELS) - state.playerHp;
     $("overlay-title").textContent = "승리!";
     $("overlay-text").textContent =
-      `${rival.name}을(를) ${state.turn}턴 만에 쓰러뜨렸어요. 체력을 ${healed} 회복합니다. 다음 상대 ${next.name}은(는) 이 결투를 지켜보며 노트를 넘겨받았어요.`;
+      `${rival.name}을(를) 주문 ${state.casts}번으로 쓰러뜨렸어요. 체력을 ${healed} 회복합니다. 다음 상대 ${next.name}은(는) 이 결투를 지켜보며 노트를 넘겨받았어요.`;
     $("overlay-btn").textContent = "다음 결투로";
     $("overlay-btn").onclick = () => {
       state.playerHp += healed;
@@ -579,7 +534,7 @@ function finishDuel(won) {
     $("overlay-title").textContent = won ? "대마법사가 되었습니다" : "패배…";
     $("overlay-text").textContent = won
       ? "세 명의 마법사를 모두 말로 쓰러뜨렸어요. 결투장에 당신의 이름이 새겨집니다."
-      : `${rival.name}의 주문에 쓰러졌어요. 상대가 읽은 내 습관을 뒤집고, 안 써 본 속성으로 약점을 찾아보세요.`;
+      : `${rival.name}에게 쓰러졌어요. 방어 마법으로 기본 공격을 막고, 안 써 본 속성으로 약점을 찾아보세요.`;
     if (state.best) {
       best.append(el("small", "", `가장 빛난 주문 · 창의력 ${state.best.creativity}/10`),
         document.createTextNode(`“${state.best.spell}”`));
@@ -620,7 +575,8 @@ $("spell-input").addEventListener("keydown", (e) => {
 $("spell-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const spell = $("spell-input").value.trim();
-  if (!spell || state.busy) return;
+  // 시전 중에도 다음 주문을 미리 써 둘 수 있다. 외우는 것만 한 번에 하나씩.
+  if (!spell || state.channeling || state.phase !== "fight") return;
   $("spell-input").value = "";
   updateCounter();
   cast(spell);
