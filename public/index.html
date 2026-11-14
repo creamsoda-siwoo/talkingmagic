@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>말로 하는 마법 대결</title>
+<meta name="description" content="주문을 버튼이 아니라 문장으로 직접 적는 마법 결투. 창의적일수록 강해져요.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="stars" aria-hidden="true"></div>
+
+<!-- 시작 화면 -->
+<section id="title-screen" class="screen">
+  <p class="eyebrow">문장으로 싸우는 결투</p>
+  <h1>말로 하는<br>마법 대결</h1>
+  <p class="lede">버튼은 없어요. 하고 싶은 마법을 문장으로 적으면<br>심판이 읽고 결과를 만들어 냅니다.</p>
+  <div class="example">
+    <span class="quote">“얼음 벽을 세우고 그 뒤로 숨는다”</span>
+    <span class="quote">“상대의 그림자를 묶어 발을 붙잡는다”</span>
+    <span class="quote">“빗물을 모아 거울을 만들고 번개를 되돌린다”</span>
+  </div>
+  <ul class="rules">
+    <li><b>창의적일수록 강해요.</b> 흔한 불덩이는 약하고, 상황을 엮은 기발한 수는 강합니다.</li>
+    <li><b>전장은 기억해요.</b> 세워 둔 벽, 깔린 안개가 다음 턴에 영향을 줍니다.</li>
+    <li><b>같은 수는 간파당해요.</b> 세 명의 마법사를 차례로 쓰러뜨리세요.</li>
+  </ul>
+  <button id="start-btn" class="primary">결투 시작</button>
+</section>
+
+<!-- 결투 화면 -->
+<main id="duel-screen" class="screen" hidden>
+  <header class="topbar">
+    <span id="stage-label">1번째 결투</span>
+    <span id="mode-badge" class="badge" hidden>연습 모드</span>
+  </header>
+
+  <section class="arena" id="arena">
+    <div class="fighter" id="player-side">
+      <div class="avatar" id="player-avatar">🧙</div>
+      <div class="name">나</div>
+      <div class="hpbar"><div class="hpfill" id="player-hpfill"></div></div>
+      <div class="hptext" id="player-hptext"></div>
+      <div class="float" id="player-float"></div>
+    </div>
+    <div class="vs">VS</div>
+    <div class="fighter" id="enemy-side">
+      <div class="avatar" id="enemy-avatar"></div>
+      <div class="name" id="enemy-name"></div>
+      <div class="hpbar"><div class="hpfill enemy" id="enemy-hpfill"></div></div>
+      <div class="hptext" id="enemy-hptext"></div>
+      <div class="float" id="enemy-float"></div>
+    </div>
+    <div class="burst" id="burst" aria-hidden="true"></div>
+  </section>
+
+  <div class="effects" id="effects" aria-label="전장에 남은 효과"></div>
+
+  <section class="log" id="log" aria-live="polite"></section>
+
+  <form id="spell-form" class="spellbox" autocomplete="off">
+    <textarea id="spell-input" rows="2" maxlength="200"
+      placeholder="어떤 마법을 쓸까요? 예) 얼음 벽을 세우고 그 뒤로 숨는다"></textarea>
+    <div class="spellbar">
+      <span id="counter" class="counter">0 / 200</span>
+      <button type="submit" id="cast-btn" class="primary">주문 외우기</button>
+    </div>
+  </form>
+</main>
+
+<!-- 결과 오버레이 -->
+<div id="overlay" class="overlay" hidden>
+  <div class="card">
+    <h2 id="overlay-title"></h2>
+    <p id="overlay-text"></p>
+    <div id="overlay-best" class="best"></div>
+    <button id="overlay-btn" class="primary"></button>
+  </div>
+</div>
+
+<script type="module" src="game.js"></script>
+</body>
+</html>

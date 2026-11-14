@@ -1,0 +1,16 @@
+{
+  "name": "talkingmagic",
+  "version": "1.0.0",
+  "private": true,
+  "description": "말로 하는 마법 대결 — 주문을 문장으로 쓰면 AI가 판정하는 결투 게임",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0"
+  }
+}
